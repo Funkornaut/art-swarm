@@ -28,6 +28,12 @@ def run_art_generation():
         img = Image.open(io.BytesIO(collection[0]))
         img.save('generated_art.png')
         print("\nSaved first piece as 'generated_art.png'")
+        img = Image.open(io.BytesIO(collection[1]))
+        img.save('generated_art_2.png')
+        print("\nSaved second piece as 'generated_art_2.png'")
+        img = Image.open(io.BytesIO(collection[2]))
+        img.save('generated_art_3.png')
+        print("\nSaved third piece as 'generated_art_3.png'")
 
 if __name__ == "__main__":
     run_art_generation()

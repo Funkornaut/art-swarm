@@ -11,6 +11,7 @@ import base64
 from PIL import Image
 import io
 import time
+from decimal import Decimal
 
 # Get configuration from environment variables
 API_KEY_NAME = os.environ.get("CDP_API_KEY_NAME")
@@ -35,57 +36,144 @@ print(f"Art wallet address: {art_wallet.default_address.address_id}")
 # this inspirations should aslo give some words or a phrase to inspire the generative art. 
 class InspoAgent:
     def __init__(self):
-        self.w3 = Web3(Web3.HTTPProvider('https://base-sepolia.g.alchemy.com/v2/your-api-key'))
+        # Initialize with CDP configuration
+        self.network = "base-sepolia"
+        # Contract addresses for inspiration
+        self.contracts = {
+            "pool_factory": "0x420dd381b31aef6683db6b902084cb0ffece40da",
+            "aero_token": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+            "position_manager": "0x827922686190790b37229fd06084350e74485b72"
+        }
+        # List of assets to check balances for
+        self.assets = ["eth", "usdc"] + list(self.contracts.values())
     
     def get_onchain_inspiration(self) -> Dict:
-        """Get inspiration from onchain data"""
+        """Use the CDP to get wallet balances and use that data for inspiration.
+        Generate a color palette and theme based on the balances and addresses.
+        """
         try:
-            # Get latest block for randomness
-            latest_block = self.w3.eth.get_block('latest')
-            block_hash = latest_block['hash'].hex()
+            # Get balances for various assets
+            balances = self._get_wallet_balances()
             
-            # Use block hash for randomness
-            random.seed(block_hash)
+            # Use balance data for randomness
+            balance_str = ''.join([str(b) for b in balances.values()])
+            random.seed(balance_str)
             
             # Generate collection parameters
             num_pieces = random.randint(1, 420)
-            color_palette = self._generate_color_palette(block_hash)
-            theme = self._determine_theme(latest_block['timestamp'])
             
-            return {
+            # Generate color palette from contract addresses and balances
+            color_palette = self._generate_color_palette_from_data(balances)
+            
+            # Determine theme based on balances
+            theme = self._determine_theme_from_balances(balances)
+            
+            # Generate inspiration words based on the data
+            words = self._generate_inspiration_words(balances, theme)
+            
+            inspiration = {
                 'num_pieces': num_pieces,
                 'color_palette': color_palette,
                 'theme': theme,
-                'block_hash': block_hash,
-                'timestamp': latest_block['timestamp']
+                'inspiration_words': words,
+                'timestamp': int(time.time()),
+                'balances': balances  # Include balances for context
             }
+            
+            print(f"Generated inspiration from onchain data: {json.dumps(inspiration, indent=2)}")
+            return inspiration
+            
         except Exception as e:
             print(f"Error getting inspiration: {str(e)}")
-            # Return default inspiration if blockchain access fails
+            # Return default inspiration if CDP access fails
             return {
                 'num_pieces': 10,
                 'color_palette': ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF'],
                 'theme': 'Abstract',
-                'block_hash': '0x0000000000000000000000000000000000000000000000000000000000000000',
-                'timestamp': int(time.time())
+                'inspiration_words': ['digital', 'flow', 'energy', 'motion', 'balance'],
+                'timestamp': int(time.time()),
+                'balances': {}
             }
     
-    def _generate_color_palette(self, block_hash: str) -> List[str]:
-        """Generate color palette from block hash"""
-        colors = []
-        for i in range(0, len(block_hash), 6):
-            if i + 6 <= len(block_hash):
-                color = f"#{block_hash[i:i+6]}"
-                colors.append(color)
-        return colors[:5]  # Return 5 colors
+    def _get_wallet_balances(self) -> Dict[str, Decimal]:
+        """Get wallet balances for various assets"""
+        balances = {}
+        for asset_id in self.assets:
+            try:
+                balance = art_wallet.balance(asset_id)
+                balances[asset_id] = balance
+            except Exception as e:
+                print(f"Error getting balance for {asset_id}: {str(e)}")
+                balances[asset_id] = Decimal('0')
+        return balances
     
-    def _determine_theme(self, timestamp: int) -> str:
-        """Determine theme based on timestamp"""
+    def _generate_color_palette_from_data(self, balances: Dict[str, Decimal]) -> List[str]:
+        """Generate color palette from balance data and contract addresses"""
+        colors = []
+        # Use contract addresses for initial colors
+        for address in self.contracts.values():
+            if len(colors) < 5:  # We want exactly 5 colors
+                color = f"#{address[2:8]}"  # Use first 6 chars after '0x'
+                colors.append(color)
+        
+        # If we need more colors, generate from balance values
+        while len(colors) < 5:
+            # Convert decimals to integers for color generation
+            # Multiply by 1M to get significant digits and handle decimals
+            balance_ints = [int(v * 1000000) for v in balances.values()]
+            # Sum the last 6 digits of each balance
+            balance_sum = sum(abs(b % 1000000) for b in balance_ints) or random.randint(0, 0xFFFFFF)
+            color = f"#{balance_sum % 0xFFFFFF:06x}"
+            if color not in colors:  # Avoid duplicate colors
+                colors.append(color)
+            else:
+                # If we got a duplicate, generate a random variation
+                hue = random.random()
+                color = f"#{int(hue * 0xFFFFFF):06x}"
+                colors.append(color)
+        
+        return colors[:5]  # Ensure exactly 5 colors
+    
+    def _determine_theme_from_balances(self, balances: Dict[str, Decimal]) -> str:
+        """Determine theme based on wallet balances"""
         themes = [
             "Cyberpunk", "Nature", "Abstract", "Geometric", 
             "Space", "Ocean", "Urban", "Minimal"
         ]
-        return themes[timestamp % len(themes)]
+        
+        # Use total balance to influence theme selection
+        total_balance = sum(balances.values())
+        balance_hash = hash(str(total_balance))
+        theme_index = abs(balance_hash) % len(themes)
+        
+        return themes[theme_index]
+    
+    def _generate_inspiration_words(self, balances: Dict[str, Decimal], theme: str) -> List[str]:
+        """Generate inspiration words based on the data"""
+        # Base words for each theme
+        theme_words = {
+            "Cyberpunk": ["neon", "digital", "future", "tech", "grid"],
+            "Nature": ["organic", "flow", "growth", "life", "bloom"],
+            "Abstract": ["form", "chaos", "harmony", "motion", "space"],
+            "Geometric": ["pattern", "structure", "order", "shape", "line"],
+            "Space": ["cosmic", "void", "star", "nebula", "galaxy"],
+            "Ocean": ["wave", "depth", "fluid", "current", "float"],
+            "Urban": ["city", "street", "pulse", "rhythm", "edge"],
+            "Minimal": ["simple", "clean", "pure", "essence", "void"]
+        }
+        
+        # Get base words for the theme
+        base_words = theme_words.get(theme, ["energy", "form", "motion", "space", "time"])
+        
+        # Use balance data to select and modify words
+        total_balance = sum(balances.values())
+        random.seed(str(total_balance))
+        
+        # Select 3-5 words
+        num_words = random.randint(3, 5)
+        selected_words = random.sample(base_words, num_words)
+        
+        return selected_words
 
 class ArtistAgent:
     def generate_art_script(self, inspiration: Dict) -> str:

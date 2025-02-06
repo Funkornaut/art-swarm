@@ -1,7 +1,10 @@
 import pytest
-from art_agents import InspoAgent
-from decimal import Decimal
+from PIL import Image
+import io
+import json
 from unittest.mock import patch, MagicMock
+from decimal import Decimal
+from art_agents import ArtistAgent, InspoAgent
 
 def test_inspo_agent():
     # Create an instance of InspoAgent
@@ -153,4 +156,130 @@ def test_cdp_integration(mock_wallet):
     assert all(key in inspiration for key in [
         'num_pieces', 'color_palette', 'theme', 
         'inspiration_words', 'timestamp', 'balances'
-    ]) 
+    ])
+
+def test_generate_art_script():
+    """Test that the art script is generated correctly"""
+    agent = ArtistAgent()
+    inspiration = {
+        'num_pieces': 1,
+        'color_palette': ['#000000', '#FFFFFF'],
+        'theme': 'Abstract',
+        'inspiration_words': ['flow', 'organic'],
+        'balances': {'eth': Decimal('1.0')}
+    }
+    
+    script = agent.generate_art_script(inspiration)
+    
+    # Check that the script contains all necessary components
+    assert 'def create_flow_field' in script
+    assert 'def create_art' in script
+    assert 'def generate_collection' in script
+    assert 'OpenSimplex' in script
+    assert 'collection = generate_collection' in script
+
+def test_execute_script():
+    """Test that the script execution produces valid image data"""
+    agent = ArtistAgent()
+    inspiration = {
+        'num_pieces': 1,
+        'color_palette': ['#000000', '#FFFFFF'],
+        'theme': 'Abstract',
+        'inspiration_words': ['flow', 'organic'],
+        'balances': {'eth': Decimal('1.0')}
+    }
+    
+    script = agent.generate_art_script(inspiration)
+    collection = agent.execute_script(script)
+    
+    # Check that we got the expected number of images
+    assert len(collection) == 1
+    
+    # Check that each item is valid image data
+    for img_data in collection:
+        assert isinstance(img_data, bytes)
+        # Verify it's a valid image
+        img = Image.open(io.BytesIO(img_data))
+        assert img.size == (2048, 2048)
+        assert img.mode == 'RGB'
+
+def test_art_generation_with_different_themes():
+    """Test art generation with different themes"""
+    agent = ArtistAgent()
+    themes = ['Abstract', 'Geometric', 'Cyberpunk', 'Nature']
+    
+    for theme in themes:
+        inspiration = {
+            'num_pieces': 1,
+            'color_palette': ['#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF'],
+            'theme': theme,
+            'inspiration_words': ['flow', 'organic'],
+            'balances': {'eth': Decimal('1.0')}
+        }
+        
+        script = agent.generate_art_script(inspiration)
+        collection = agent.execute_script(script)
+        
+        assert len(collection) == 1
+        img = Image.open(io.BytesIO(collection[0]))
+        assert img.size == (2048, 2048)
+
+def test_error_handling():
+    """Test error handling in art generation"""
+    agent = ArtistAgent()
+    
+    # Test with invalid color format
+    inspiration = {
+        'num_pieces': 1,
+        'color_palette': ['invalid_color'],
+        'theme': 'Abstract',
+        'inspiration_words': ['flow'],
+        'balances': {'eth': Decimal('1.0')}
+    }
+    
+    script = agent.generate_art_script(inspiration)
+    collection = agent.execute_script(script)
+    
+    # Should still produce an image (fallback to black)
+    assert len(collection) == 1
+    img = Image.open(io.BytesIO(collection[0]))
+    assert img.size == (2048, 2048)
+
+def test_multiple_pieces():
+    """Test generating multiple pieces"""
+    agent = ArtistAgent()
+    inspiration = {
+        'num_pieces': 3,
+        'color_palette': ['#000000', '#FFFFFF'],
+        'theme': 'Abstract',
+        'inspiration_words': ['flow', 'organic'],
+        'balances': {'eth': Decimal('1.0')}
+    }
+    
+    script = agent.generate_art_script(inspiration)
+    collection = agent.execute_script(script)
+    
+    assert len(collection) == 3
+    for img_data in collection:
+        img = Image.open(io.BytesIO(img_data))
+        assert img.size == (2048, 2048)
+
+def test_integration_with_inspo_agent():
+    """Test integration between InspoAgent and ArtistAgent"""
+    with patch('art_agents.InspoAgent._get_wallet_balances') as mock_balances:
+        # Mock wallet balances
+        mock_balances.return_value = {'eth': Decimal('1.0')}
+        
+        inspo_agent = InspoAgent()
+        artist_agent = ArtistAgent()
+        
+        # Get inspiration from InspoAgent
+        inspiration = inspo_agent.get_onchain_inspiration()
+        
+        # Generate art using the inspiration
+        script = artist_agent.generate_art_script(inspiration)
+        collection = artist_agent.execute_script(script)
+        
+        assert len(collection) > 0
+        img = Image.open(io.BytesIO(collection[0]))
+        assert img.size == (2048, 2048)

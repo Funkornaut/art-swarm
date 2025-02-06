@@ -12,6 +12,9 @@ from PIL import Image
 import io
 import time
 from decimal import Decimal
+import noise
+import math
+from opensimplex import OpenSimplex
 
 # Get configuration from environment variables
 API_KEY_NAME = os.environ.get("CDP_API_KEY_NAME")
@@ -22,11 +25,17 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 Cdp.configure(API_KEY_NAME, PRIVATE_KEY)
 
 # Create a new wallet on the Base Sepolia testnet
-art_wallet = Wallet.create()
+art_wallet = None
 
-# Request funds from the faucet (only works on testnet)
-faucet = art_wallet.faucet()
-print(f"Art wallet address: {art_wallet.default_address.address_id}")
+def get_art_wallet():
+    global art_wallet
+    if art_wallet is None:
+        art_wallet = Wallet.create()
+        # Request funds from the faucet (only works on testnet)
+        art_wallet.faucet()
+        print(f"Art wallet address: {art_wallet.default_address.address_id}")
+    return art_wallet
+
 # the insop agent should grab onchain data through the CDP
 # use the onchain data api and or data from smart contract data.
 # i have configured 3 contracts from Aerodrome: 
@@ -37,8 +46,9 @@ print(f"Art wallet address: {art_wallet.default_address.address_id}")
 class InspoAgent:
     def __init__(self):
         # Initialize with CDP configuration
-        self.network = "base-sepolia"
+        self.network = "base-mainnet"
         # Contract addresses for inspiration
+        # TODO we need to come back to this and get some events from these contracts to use as data for the artist
         self.contracts = {
             "pool_factory": "0x420dd381b31aef6683db6b902084cb0ffece40da",
             "aero_token": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
@@ -98,9 +108,10 @@ class InspoAgent:
     def _get_wallet_balances(self) -> Dict[str, Decimal]:
         """Get wallet balances for various assets"""
         balances = {}
+        wallet = get_art_wallet()
         for asset_id in self.assets:
             try:
-                balance = art_wallet.balance(asset_id)
+                balance = wallet.balance(asset_id)
                 balances[asset_id] = balance
             except Exception as e:
                 print(f"Error getting balance for {asset_id}: {str(e)}")
@@ -178,93 +189,185 @@ class InspoAgent:
 class ArtistAgent:
     def generate_art_script(self, inspiration: Dict) -> str:
         """Generate Python script for art collection based on inspiration"""
-        script = f'''
+        # Format the inspiration data for the script
+        num_pieces = inspiration.get('num_pieces', 1)
+        colors = inspiration.get('color_palette', ['#000000'])
+        theme = inspiration.get('theme', 'Abstract')
+        
+        # Convert Decimal values to strings for JSON serialization
+        inspiration_copy = inspiration.copy()
+        if 'balances' in inspiration_copy:
+            balances_dict = {}
+            for k, v in inspiration_copy['balances'].items():
+                balances_dict[k] = str(v)
+            inspiration_copy['balances'] = balances_dict
+        
+        inspiration_json = json.dumps(inspiration_copy)
+        
+        script = '''
 import random
 from PIL import Image, ImageDraw
 import colorsys
 import math
 import io
+import json
+from decimal import Decimal
+from opensimplex import OpenSimplex
+from typing import List, Tuple
 
-def create_art(token_id, block_hash, colors, theme="{inspiration['theme']}"):
-    # Create base image
-    img = Image.new('RGB', (1024, 1024), colors[0])
-    draw = ImageDraw.Draw(img)
+def create_flow_field(width: int, height: int, scale: float, octaves: int, seed: int) -> List[List[float]]:
+    """Create a flow field using OpenSimplex noise"""
+    field = []
+    noise_gen = OpenSimplex(seed=seed)
     
-    # Use block hash for consistent randomness
-    random.seed(block_hash + str(token_id))
-    
-    # Theme-specific generation
-    if theme == "Geometric":
-        for _ in range(50):
-            x1 = random.randint(0, 1024)
-            y1 = random.randint(0, 1024)
-            x2 = random.randint(0, 1024)
-            y2 = random.randint(0, 1024)
-            color = random.choice(colors[1:])
-            draw.line([(x1, y1), (x2, y2)], fill=color, width=5)
+    for y in range(height):
+        row = []
+        for x in range(width):
+            # Use multiple layers of noise for more organic flow
+            noise_val = 0
+            for i in range(octaves):
+                freq = 1 * 2**i
+                noise_val += noise_gen.noise2(
+                    x=x * scale * freq,
+                    y=y * scale * freq
+                ) * (1 / 2**i)
+            angle = noise_val * math.pi  # Scale to [-π, π]
+            row.append(angle)
+        field.append(row)
+    return field
+
+def create_art(token_id: int, inspiration_data: dict, colors: List[str], theme: str) -> bytes:
+    """Create generative art inspired by flow field techniques"""
+    try:
+        # Initialize canvas
+        width, height = 2048, 2048  # Higher resolution for better detail
+        img = Image.new('RGB', (width, height), colors[0])
+        draw = ImageDraw.Draw(img)
+        
+        # Use inspiration data for parameters
+        words = inspiration_data.get('inspiration_words', [])
+        balances = dict()
+        for k, v in inspiration_data.get('balances', {}).items():
+            balances[k] = Decimal(str(v))
+        
+        # Convert balance values to parameters
+        total_balance = sum(balances.values())
+        balance_factor = math.log(float(total_balance) + 1) + 1  # Prevent log(0)
+        
+        # Parameters influenced by onchain data
+        num_curves = int(50 * balance_factor)
+        curve_length = int(200 * balance_factor)
+        flow_scale = 0.005 * balance_factor
+        line_width_base = max(1, min(5, balance_factor))
+        
+        # Create flow field
+        seed = abs(hash(str(token_id) + str(balances)) % (2**32))
+        flow_field = create_flow_field(width//20, height//20, flow_scale, 4, seed)
+        
+        # Theme-specific parameters
+        if theme == "Geometric":
+            num_curves *= 2
+            curve_length //= 2
+            flow_scale *= 1.5
             
-    elif theme == "Abstract":
-        for _ in range(30):
-            x = random.randint(0, 1024)
-            y = random.randint(0, 1024)
-            size = random.randint(50, 200)
-            color = random.choice(colors[1:])
-            draw.ellipse([x-size, y-size, x+size, y+size], fill=color)
+        elif theme == "Abstract":
+            num_curves = int(num_curves * 1.5)
+            curve_length = int(curve_length * 1.2)
             
-    elif theme == "Cyberpunk":
-        # Grid pattern
-        for x in range(0, 1024, 50):
-            color = random.choice(colors[1:])
-            draw.line([(x, 0), (x, 1024)], fill=color, width=2)
-        for y in range(0, 1024, 50):
-            color = random.choice(colors[1:])
-            draw.line([(0, y), (1024, y)], fill=color, width=2)
-        # Glitch effects
-        for _ in range(20):
-            x = random.randint(0, 924)
-            y = random.randint(0, 924)
-            w = random.randint(50, 100)
-            h = random.randint(10, 30)
-            color = random.choice(colors[1:])
-            draw.rectangle([x, y, x+w, y+h], fill=color)
+        elif theme == "Cyberpunk":
+            # Add a subtle grid underlay
+            grid_spacing = int(width / (10 * balance_factor))
+            for x in range(0, width, grid_spacing):
+                alpha = int(25 + abs(math.sin(x * 0.01)) * 25)
+                grid_color = f"#{colors[1][1:3]}{colors[2][3:5]}{colors[3][5:7]}{alpha:02x}"
+                draw.line([(x, 0), (x, height)], fill=grid_color, width=1)
+            for y in range(0, height, grid_spacing):
+                alpha = int(25 + abs(math.sin(y * 0.01)) * 25)
+                grid_color = f"#{colors[2][1:3]}{colors[3][3:5]}{colors[1][5:7]}{alpha:02x}"
+                draw.line([(0, y), (width, y)], fill=grid_color, width=1)
+        
+        # Generate curves based on flow field
+        for _ in range(num_curves):
+            # Random starting position
+            x = random.randint(0, width-1)
+            y = random.randint(0, height-1)
             
-    elif theme == "Nature":
-        # Draw organic shapes
-        for _ in range(40):
+            # Select color based on position and theme
+            color_index = (int(x/width * len(colors)) + int(y/height * len(colors))) % len(colors)
+            color = colors[color_index]
+            
+            # Create curve points
             points = []
-            center_x = random.randint(0, 1024)
-            center_y = random.randint(0, 1024)
-            for i in range(random.randint(3, 8)):
-                angle = (i / 8) * 2 * math.pi
-                radius = random.randint(20, 100)
-                x = center_x + radius * math.cos(angle)
-                y = center_y + radius * math.sin(angle)
+            for _ in range(curve_length):
                 points.append((x, y))
-            color = random.choice(colors[1:])
-            draw.polygon(points, fill=color)
-    
-    # Convert to bytes
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='PNG')
-    img_byte_arr = img_byte_arr.getvalue()
-    
-    return img_byte_arr
+                
+                # Get flow field angle
+                field_x, field_y = int((x/width) * len(flow_field[0])), int((y/height) * len(flow_field))
+                angle = flow_field[field_y][field_x]
+                
+                # Move in flow direction
+                step_length = random.uniform(1, 3) * balance_factor
+                x += math.cos(angle) * step_length
+                y += math.sin(angle) * step_length
+                
+                # Bounce off edges
+                x = max(0, min(width-1, x))
+                y = max(0, min(height-1, y))
+            
+            # Draw curve with varying width
+            if len(points) > 1:
+                for i in range(len(points)-1):
+                    # Vary line width based on position and data
+                    progress = i / len(points)
+                    width_var = math.sin(progress * math.pi)
+                    line_width = max(1, int(line_width_base * (1 + width_var)))
+                    
+                    # Add slight transparency for layering effect
+                    alpha = int(200 + 55 * width_var)
+                    line_color = f"#{color[1:7]}{alpha:02x}"
+                    
+                    draw.line([points[i], points[i+1]], fill=line_color, width=line_width)
+        
+        # Add texture overlay based on theme
+        if theme in ["Nature", "Abstract"]:
+            for _ in range(1000):
+                x = random.randint(0, width-1)
+                y = random.randint(0, height-1)
+                size = random.randint(1, 3)
+                alpha = random.randint(10, 40)
+                texture_color = f"#{colors[-1][1:7]}{alpha:02x}"
+                draw.ellipse([x-size, y-size, x+size, y+size], fill=texture_color)
+        
+        # Convert to bytes
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG', quality=95)
+        img_byte_arr = img_byte_arr.getvalue()
+        
+        return img_byte_arr
+    except Exception as e:
+        print(f"Error creating art: {str(e)}")
+        # Return a simple colored square as fallback
+        img = Image.new('RGB', (2048, 2048), colors[0])
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        return img_byte_arr.getvalue()
 
-def generate_collection(num_pieces, block_hash, colors, theme):
+def generate_collection(num_pieces: int, inspiration_data: dict, colors: List[str], theme: str) -> List[bytes]:
+    """Generate a collection of art pieces"""
     collection = []
-    for i in range(num_pieces):
-        img_bytes = create_art(i, block_hash, colors, theme)
+    for i in range(max(1, num_pieces)):  # Ensure at least 1 piece
+        img_bytes = create_art(i, inspiration_data, colors, theme)
         collection.append(img_bytes)
     return collection
 
 # Collection parameters
-NUM_PIECES = {inspiration['num_pieces']}
-BLOCK_HASH = "{inspiration['block_hash']}"
-COLORS = {inspiration['color_palette']}
-THEME = "{inspiration['theme']}"
+NUM_PIECES = ''' + str(num_pieces) + '''
+COLORS = ''' + str(colors) + '''
+THEME = ''' + json.dumps(theme) + '''
+INSPIRATION_DATA = ''' + inspiration_json + '''
 
 # Generate collection
-collection = generate_collection(NUM_PIECES, BLOCK_HASH, COLORS, THEME)
+collection = generate_collection(NUM_PIECES, INSPIRATION_DATA, COLORS, THEME)
 '''
         return script
 
@@ -349,8 +452,8 @@ collection = generate_collection(NUM_PIECES, BLOCK_HASH, COLORS, THEME)
 #             return None
 
 # # Create agent instances
-# inspo_agent = InspoAgent()
-# artist_agent = ArtistAgent()
+inspo_agent = InspoAgent()
+artist_agent = ArtistAgent()
 # image_agent = ImageAgent()
 # rodeo_agent = RodeoAgent()
 
@@ -371,23 +474,42 @@ def create_generative_collection():
         if not collection:
             raise Exception("Failed to generate art collection")
         
-        # 3. Upload first piece and collection metadata to IPFS
+        # 3. Upload all pieces and collection metadata to IPFS
         collection_metadata = {
             'name': f"{inspiration['theme']} Collection",
             'description': f"A generative art collection inspired by {inspiration['theme']}",
             'attributes': [
                 {'trait_type': 'Theme', 'value': inspiration['theme']},
                 {'trait_type': 'Collection Size', 'value': inspiration['num_pieces']}
-            ]
+            ],
+            'pieces': []  # Will store metadata for each piece
         }
         
-        # Upload first piece as collection cover
-        cover_hash = image_agent.upload_to_ipfs(collection[0], collection_metadata)
-        if not cover_hash:
-            raise Exception("Failed to upload to IPFS")
+        # Upload each piece and store its metadata
+        piece_hashes = []
+        for i, piece in enumerate(collection):
+            piece_metadata = {
+                'name': f"{inspiration['theme']} #{i+1}",
+                'description': f"Piece #{i+1} from {inspiration['theme']} Collection",
+                'attributes': [
+                    {'trait_type': 'Theme', 'value': inspiration['theme']},
+                    {'trait_type': 'Piece Number', 'value': i+1}
+                ]
+            }
+            piece_hash = image_agent.upload_to_ipfs(piece, piece_metadata)
+            if not piece_hash:
+                raise Exception(f"Failed to upload piece #{i+1} to IPFS")
+            piece_hashes.append(piece_hash)
+            collection_metadata['pieces'].append({
+                'piece_number': i+1,
+                'ipfs_hash': piece_hash,
+                'metadata': piece_metadata
+            })
+        
+        # Use first piece as collection cover
+        collection_metadata['image'] = f"ipfs://{piece_hashes[0]}"
         
         # 4. Post to Rodeo
-        collection_metadata['image'] = f"ipfs://{cover_hash}"
         collection_id = rodeo_agent.post_to_rodeo(collection_metadata)
         if not collection_id:
             raise Exception("Failed to post to Rodeo")
@@ -399,7 +521,8 @@ def create_generative_collection():
             'inspiration': inspiration,
             'collection_id': collection_id,
             'rodeo_url': rodeo_url,
-            'ipfs_hash': cover_hash,
+            'cover_hash': piece_hashes[0],
+            'piece_hashes': piece_hashes,
             'num_pieces': len(collection)
         }
     

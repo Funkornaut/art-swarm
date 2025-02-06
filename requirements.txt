@@ -43,7 +43,9 @@ langchain-core==0.3.33
 langchain-text-splitters==0.3.5
 langsmith==0.3.6
 multidict==6.1.0
+noise==1.2.2
 numpy==1.26.4
+opensimplex==0.4.5
 openai==1.61.1
 orjson==3.10.15
 packaging==24.2
@@ -77,3 +79,4 @@ web3==7.8.0
 websockets==13.1
 yarl==1.18.3
 zstandard==0.23.0
+pytest==8.0.0

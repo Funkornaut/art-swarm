@@ -38,6 +38,7 @@ def get_art_wallet():
 
 # the insop agent should grab onchain data through the CDP
 # use the onchain data api and or data from smart contract data.
+# TODO
 # i have configured 3 contracts from Aerodrome: 
 # Pool factory: 0x420dd381b31aef6683db6b902084cb0ffece40da 
 # AERO token: 0x940181a94a35a4569e4529a3cdfb74e38fd98631 
@@ -149,7 +150,8 @@ class InspoAgent:
         """Determine theme based on wallet balances"""
         themes = [
             "Cyberpunk", "Nature", "Abstract", "Geometric", 
-            "Space", "Ocean", "Urban", "Minimal"
+            "Space", "Ocean", "Urban", "Minimal",
+            "Fantasy", "Retro", "Surreal", "Industrial"
         ]
         
         # Use total balance to influence theme selection
@@ -170,7 +172,11 @@ class InspoAgent:
             "Space": ["cosmic", "void", "star", "nebula", "galaxy"],
             "Ocean": ["wave", "depth", "fluid", "current", "float"],
             "Urban": ["city", "street", "pulse", "rhythm", "edge"],
-            "Minimal": ["simple", "clean", "pure", "essence", "void"]
+            "Minimal": ["simple", "clean", "pure", "essence", "void"],
+            "Fantasy": ["magic", "myth", "legend", "fairy", "enchant"],
+            "Retro": ["vintage", "nostalgia", "retro", "classic", "retro"],
+            "Surreal": ["dream", "illusion", "surreal", "paradox", "mystery"],
+            "Industrial": ["factory", "machinery", "steel", "concrete", "grunge"]
         }
         
         # Get base words for the theme
@@ -384,41 +390,44 @@ collection = generate_collection(NUM_PIECES, INSPIRATION_DATA, COLORS, THEME)
             print(f"Error executing art script: {str(e)}")
             return []
 
-# class ImageAgent:
-#     def __init__(self):
-#         self.ipfs_endpoint = "https://api.pinata.cloud/pinning/pinFileToIPFS"
-#         self.ipfs_api_key = os.environ.get("PINATA_API_KEY")
-#         self.ipfs_secret = os.environ.get("PINATA_SECRET_KEY")
+class IpfsAgent:
+    def __init__(self):
+        self.pinata_api_endpoint = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+        self.pinata_json_endpoint = "https://api.pinata.cloud/pinning/pinJSONToIPFS"
+        self.pinata_jwt = os.environ.get("PINATA_JWT")
         
-#         if not self.ipfs_api_key or not self.ipfs_secret:
-#             raise ValueError("PINATA_API_KEY and PINATA_SECRET_KEY environment variables are required")
+        if not self.pinata_jwt:
+            raise ValueError("PINATA_JWT environment variable is required")
     
-#     def upload_to_ipfs(self, image_data: bytes, metadata: Dict) -> str:
-#         """Upload image and metadata to IPFS"""
-#         try:
-#             headers = {
-#                 'pinata_api_key': self.ipfs_api_key,
-#                 'pinata_secret_api_key': self.ipfs_secret
-#             }
+    def upload_to_ipfs(self, image_data: bytes, metadata: Dict) -> str:
+        """Upload image and metadata to IPFS"""
+        try:
+            # Upload image first
+            headers = {
+                'Authorization': f'Bearer {self.pinata_jwt}'
+            }
             
-#             # Upload image
-#             files = {'file': ('art.png', image_data)}
-#             response = requests.post(self.ipfs_endpoint, files=files, headers=headers)
-#             response.raise_for_status()  # Raise exception for bad status codes
-#             image_hash = response.json()['IpfsHash']
+            # Upload image as file
+            files = {'file': ('art.png', image_data)}
+            response = requests.post(self.pinata_api_endpoint, files=files, headers=headers)
+            response.raise_for_status()
+            image_hash = response.json()['IpfsHash']
             
-#             # Upload metadata
-#             metadata['image'] = f"ipfs://{image_hash}"
-#             metadata_response = requests.post(
-#                 self.ipfs_endpoint,
-#                 files={'file': ('metadata.json', json.dumps(metadata))},
-#                 headers=headers
-#             )
-#             metadata_response.raise_for_status()
-#             return metadata_response.json()['IpfsHash']
-#         except Exception as e:
-#             print(f"Error uploading to IPFS: {str(e)}")
-#             return None
+            # Update metadata with IPFS image link
+            metadata['image'] = f"ipfs://{image_hash}"
+            
+            # Upload metadata as JSON
+            json_response = requests.post(
+                self.pinata_json_endpoint,
+                json=metadata,  # Send as JSON directly
+                headers=headers
+            )
+            json_response.raise_for_status()
+            return json_response.json()['IpfsHash']
+            
+        except Exception as e:
+            print(f"Error uploading to IPFS: {str(e)}")
+            return None
 
 # class RodeoAgent:
 #     def __init__(self):
@@ -454,7 +463,7 @@ collection = generate_collection(NUM_PIECES, INSPIRATION_DATA, COLORS, THEME)
 # # Create agent instances
 inspo_agent = InspoAgent()
 artist_agent = ArtistAgent()
-# image_agent = ImageAgent()
+image_agent = IpfsAgent()
 # rodeo_agent = RodeoAgent()
 
 # Function to orchestrate the entire process

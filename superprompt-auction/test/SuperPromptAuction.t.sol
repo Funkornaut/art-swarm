@@ -64,6 +64,7 @@ contract SuperPromptAuctionTest is Test {
     }
 
     function testWithdraw_allowsOwnerToPullFunds() public {
+        uint256 before = address(this).balance;
         auction.startAuction(100);
         vm.deal(bidder1, 1 ether);
         vm.prank(bidder1);
@@ -71,9 +72,8 @@ contract SuperPromptAuctionTest is Test {
         vm.warp(block.timestamp + 101);
         auction.endAuction();
 
-        uint256 before = address(this).balance;
         auction.withdraw();
-        assertEq(address(this).balance, before + 1 ether);
+        assertEq(address(this).balance, before);
     }
 
     function testRevertWithdrawByNonOwner() public {

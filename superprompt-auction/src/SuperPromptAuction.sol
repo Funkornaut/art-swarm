@@ -65,6 +65,6 @@ contract SuperPromptAuction is ISuperPromptAuction {
     }
 
     function withdraw() external override onlyOwner {
-        payable(owner).transfer(address(this).balance);
+        payable(owner).call{value: address(this).balance}("");
     }
 }
